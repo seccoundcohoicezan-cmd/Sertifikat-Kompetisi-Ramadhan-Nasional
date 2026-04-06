@@ -1371,11 +1371,237 @@
   </div>
 
   <script>
-    const SHEET_ID = "14up9Pt3V0CxNYThUix-3sbCblRCvRnW8_zcHnPWtSIQ";
-    const SHEET_GID = "0";
-    const SHEET_CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${SHEET_GID}`;
+  const SHEET_ID = "14up9Pt3V0CxNYThUix-3sbCblRCvRnW8_zcHnPWtSIQ";
+  const SHEET_GID = "0";
+  const SHEET_CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${SHEET_GID}`;
 
-    const searchInput = document.getElementById("recipientSearch");
-    const categoryFilter = document.getElementById("categoryFilter");
-    const refreshButton = document.getElementById("refreshRecipients");
-    const recip
+  const searchInput = document.getElementById("recipientSearch");
+  const categoryFilter = document.getElementById("categoryFilter");
+  const refreshButton = document.getElementById("refreshRecipients");
+  const recipientGrid = document.getElementById("recipientGrid");
+  const recipientState = document.getElementById("recipientState");
+  const statTotal = document.getElementById("statTotal");
+  const statSent = document.getElementById("statSent");
+  const statCategory = document.getElementById("statCategory");
+  const statUpdated = document.getElementById("statUpdated");
+
+  let allRecipients = [];
+
+  refreshButton.addEventListener("click", loadRecipients);
+  searchInput.addEventListener("input", renderRecipients);
+  categoryFilter.addEventListener("change", renderRecipients);
+
+  loadRecipients();
+
+  function showState(type, message) {
+    recipientGrid.hidden = true;
+    recipientState.hidden = false;
+    recipientState.className = `${type}-state`;
+    recipientState.innerHTML =
+      type === "loading"
+        ? `${message}<div class="loading-dots"><span></span><span></span><span></span></div>`
+        : message;
+  }
+
+  function normalizeText(value) {
+    return String(value || "").trim();
+  }
+
+  function formatStatus(statusText) {
+    const status = normalizeText(statusText);
+    if (/email sent/i.test(status)) return "Email Terkirim";
+    if (/error/i.test(status)) return "Perlu Cek Ulang";
+    return status || "Status belum tersedia";
+  }
+
+  function extractDate(statusText) {
+    const raw = normalizeText(statusText);
+    const firstChunk = raw.split(",")[0]?.trim() || "-";
+    return firstChunk;
+  }
+
+  async function loadRecipients() {
+    showState("loading", "Mengambil data terbaru dari Google Sheet...");
+
+    try {
+      const response = await fetch(SHEET_CSV_URL, {
+        cache: "no-store",
+        mode: "cors"
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const csvText = await response.text();
+      const rows = parseCSV(csvText);
+
+      if (!rows.length || rows.length === 1) {
+        showState("empty", "Data sheet kosong atau belum bisa dibaca.");
+        return;
+      }
+
+      const header = rows[0].map(item => normalizeText(item).toLowerCase());
+      const nameIndex = header.findIndex(h => h.includes("nama"));
+      const schoolIndex = header.findIndex(h => h.includes("sekolah"));
+      const categoryIndex = header.findIndex(h => h.includes("kategori"));
+      const statusIndex = header.findIndex(
+        h => h.includes("status") || h.includes("send status")
+      );
+
+      if (
+        nameIndex === -1 ||
+        schoolIndex === -1 ||
+        categoryIndex === -1 ||
+        statusIndex === -1
+      ) {
+        throw new Error("Kolom sheet tidak sesuai.");
+      }
+
+      allRecipients = rows
+        .slice(1)
+        .map(cols => ({
+          nama: normalizeText(cols[nameIndex]),
+          sekolah: normalizeText(cols[schoolIndex]),
+          kategori: normalizeText(cols[categoryIndex]),
+          statusRaw: normalizeText(cols[statusIndex])
+        }))
+        .filter(item => item.nama && item.sekolah && item.kategori)
+        .filter(item => /email sent|error/i.test(item.statusRaw));
+
+      populateCategories(allRecipients);
+      renderRecipients();
+
+      statUpdated.textContent = new Date().toLocaleTimeString("id-ID", {
+        hour: "2-digit",
+        minute: "2-digit"
+      });
+    } catch (error) {
+      console.error("Load sheet error:", error);
+      showState(
+        "error",
+        "Data belum bisa dimuat. Pastikan Google Sheet dibagikan ke publik, lalu klik Muat Ulang Data."
+      );
+    }
+  }
+
+  function parseCSV(text) {
+    const rows = [];
+    let row = [];
+    let value = "";
+    let inQuotes = false;
+
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i];
+      const next = text[i + 1];
+
+      if (char === '"') {
+        if (inQuotes && next === '"') {
+          value += '"';
+          i++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (char === "," && !inQuotes) {
+        row.push(value);
+        value = "";
+      } else if ((char === "\n" || char === "\r") && !inQuotes) {
+        if (char === "\r" && next === "\n") i++;
+        row.push(value);
+        if (row.some(cell => cell !== "")) rows.push(row);
+        row = [];
+        value = "";
+      } else {
+        value += char;
+      }
+    }
+
+    if (value.length || row.length) {
+      row.push(value);
+      if (row.some(cell => cell !== "")) rows.push(row);
+    }
+
+    return rows;
+  }
+
+  function populateCategories(data) {
+    const previousValue = categoryFilter.value;
+    const categories = [...new Set(data.map(item => item.kategori))].sort((a, b) =>
+      a.localeCompare(b, "id")
+    );
+
+    categoryFilter.innerHTML =
+      '<option value="">Semua kategori lomba</option>';
+
+    categories.forEach(category => {
+      const option = document.createElement("option");
+      option.value = category;
+      option.textContent = category;
+      categoryFilter.appendChild(option);
+    });
+
+    categoryFilter.value = categories.includes(previousValue)
+      ? previousValue
+      : "";
+  }
+
+  function renderRecipients() {
+    const keyword = normalizeText(searchInput.value).toLowerCase();
+    const selectedCategory = categoryFilter.value;
+
+    const filtered = allRecipients.filter(item => {
+      const searchable =
+        `${item.nama} ${item.sekolah} ${item.kategori}`.toLowerCase();
+      const matchKeyword = !keyword || searchable.includes(keyword);
+      const matchCategory = !selectedCategory || item.kategori === selectedCategory;
+      return matchKeyword && matchCategory;
+    });
+
+    statTotal.textContent = filtered.length.toLocaleString("id-ID");
+    statSent.textContent = filtered
+      .filter(item => /email sent/i.test(item.statusRaw))
+      .length.toLocaleString("id-ID");
+    statCategory.textContent = new Set(
+      filtered.map(item => item.kategori)
+    ).size.toLocaleString("id-ID");
+
+    if (!filtered.length) {
+      showState(
+        "empty",
+        "Belum ada data yang cocok dengan pencarian atau filter yang dipilih."
+      );
+      return;
+    }
+
+    recipientState.hidden = true;
+    recipientGrid.hidden = false;
+
+    recipientGrid.innerHTML = filtered
+      .map(
+        (item, index) => `
+        <article class="recipient-card" style="animation-delay:${Math.min(
+          index * 0.04,
+          0.5
+        )}s">
+          <h4>${escapeHtml(item.nama)}</h4>
+          <p class="recipient-school">${escapeHtml(item.sekolah)}</p>
+          <div class="recipient-category">${escapeHtml(item.kategori)}</div>
+          <div class="recipient-meta">
+            <span class="status-badge">${escapeHtml(formatStatus(item.statusRaw))}</span>
+            <span class="sent-date">${escapeHtml(extractDate(item.statusRaw))}</span>
+          </div>
+        </article>
+      `
+      )
+      .join("");
+  }
+
+  function escapeHtml(text) {
+    return String(text)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+</script>
